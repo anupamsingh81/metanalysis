@@ -1,0 +1,222 @@
+---
+title: "Metaanalysis in R"
+output:
+  html_document: default
+  html_notebook: default
+  pdf_document: default
+---
+
+Metaanalysis is a form of bayesian hierarchical modelling.Lets explore
+
+# correlations
+compare with metafor(frequentist) and brms package(bayesian)
+
+bayesian random effects have an advantage in rando effect models that they give probability distributions compared to frequentist point estimates.
+
+<http://www.metafor-project.org/doku.php/tips:rma_vs_lm_lme_lmer?s%5B%5D=lme4>
+<https://mvuorre.github.io/post/2016/2016-09-29-bayesian-meta-analysis/>
+
+#Fixed-Effects Model
+
+Let's start with a fixed-effects model. As an example, consider the data from the meta-analysis by Molloy et al. (2014) on the relationship between conscientiousness and medication adherence. For each study, we can compute the r-to-z transformed correlation coefficient and corresponding sampling variance with: 
+
+```{r}
+library(metafor)
+library(lme4)
+library(brms)
+library(tidyverse)
+
+data = dat.molloy2014 # correlation data set
+
+dat <- escalc(measure="ZCOR", ri=ri, ni=ni, data=dat.molloy2014) # transforming correlation to yi(transformed correlation also called effect size) and vi( variance) akin to odds ratio/proportional log odds ratio in binary outcome and standard mean difference in continuous outcome, and standard error depending upon n(number) and r(correlation)
+
+# escalc leads to calculation of yi(effect size) and vi(variance or standard error which is essential for metaanalysis)
+
+
+# removing next five columns
+dat[,-c(5:10)]
+# adding sei (standard error which is square root of variance
+
+dat$sei = sqrt(dat$vi)
+
+# changing name from  author to study
+
+names(dat)[names(dat)=="authors"] <- "study"
+
+dat
+
+# ggplot2 graphics of effect size and standard error to make forest plot
+# see tthe us eof segment and limitation of axis here
+
+
+ggplot(dat, aes(x=yi, y=study)) +
+    geom_segment(aes(x = yi-sei*2, xend = yi+sei*2, y=study, yend=study)) +
+    geom_point()
+
+
+# fixed effect
+
+
+res.fe <- rma(yi, vi, data=dat, method="FE")
+res.fe
+
+# Random effect
+res.re <- rma(yi, vi, data=dat)
+res.re
+
+# Default
+
+ma_out <- rma(data = dat, yi = yi, sei = sei, slab = dat$study)
+summary(ma_out)
+
+
+```
+
+
+same model linear regression(lm)
+
+```{r}
+res.lm <- lm(yi ~ 1, weights = 1/vi, data=dat)
+summary(res.lm)
+```
+
+
+```{r}
+
+```
+
+# Mixed effect fequentist models
+nlme and lme4
+
+```{r}
+library(nlme)
+dat$study <- 1:nrow(dat)
+res.lme <- lme(yi ~ 1, random = ~ 1 | study, weights = varFixed(~ vi), data=dat)
+summary(res.lme)
+```
+
+lme4
+
+```{r}
+library(lme4)
+res.lmer <- lmer(yi ~ 1 + (1 | study), weights = 1/vi, data=dat, 
+                 control=lmerControl(check.nobs.vs.nlev="ignore", check.nobs.vs.nRE="ignore"))
+summary(res.lmer)
+```
+
+
+ Note that some of the default checks need to be switched off before lmer() will go through with fitting this model.
+
+A couple things are of note here:
+
+    The estimated intercept differs from the model coefficient obtained earlier with the rma() function.
+    The standard error is also different (and hence, the test statistic and p-value also differs).
+    The estimated standard deviation of the random effects also differs (0.0682 for lme() and lmer() compared to 0.0901 for rma()).
+
+These discrepancies are due to the exact same reason described earlier. The lme() and lmer() functions assume that the sampling variances are not exactly known, but again just up to a proportionality constant, namely the residual variance. 
+
+# Bayesian analysis of correlation
+
+So far so good, we’re strictly in the realm of standard meta-analysis. But I would like to propose that instead of using custom meta-analysis software, we simply consider the above model as just another regression model, and fit it like we would any other (multilevel) regression model. That is, using Stan, usually through the brms interface. Going Bayesian allows us to assign prior distributions on the population-level parameters μ and τ
+
+, and we would usually want to use some very mildly regularizing priors. Here, to make the results most comparable, I’ll use uniform (non-informative) priors:
+
+μ∼U(−∞,∞)
+
+and
+
+τ∼U(0,1000)
+
+```{r}
+library(brms)
+brm_out <- brm(yi | se(sei) ~ 1 + (1|study), 
+               prior = set_prior("uniform(0, 1000)", class = "sd"),
+               data = dat, iter = 5000, warmup = 2000, cores = 4)
+```
+
+Results similar to metafor
+
+However,We can now compare the results of these two estimation methods. Of course, the Bayesian method has a tremendous advantage, because it results in an actual distribution of plausible values, whereas the frequentist method gives us just point estimates.
+
+We can see from the numeric output, and especially the figures, that these modes of inference yield the same numerical results. Keep in mind though, that the Bayesian estimates actually allow you to discuss probabilities, and generally the things that we’d like to discuss when talking about results.
+
+For example, what is the probability that the average effect size is greater than 0.2?
+
+```{r}
+avg_es <- as.data.frame(brm_out, pars = "b_")[,1]
+cat( (sum(avg_es > 0.2) / length(avg_es))*100, "%")
+```
+
+
+ggplot2 for beautiful forest plot 
+
+
+```{r}
+# formatting data for ggplot
+dat$authors = data$authors
+dat 
+
+
+```
+```{r}
+# Drop columns by NULL
+dat$label = NULL
+dat = dat%>% select(yi,study,sei,authors)
+
+
+
+```
+
+```{r}
+dat = rename(dat, label = authors)
+
+
+```
+
+```{r}
+devtools::install_github("mvuorre/vmisc")
+library(vmisc)
+brms_forest(data = dat, model = brm_out)
+```
+
+# Let us try with a standard mean difference , continuous data
+
+Fit meta-analytic model with brms
+
+Fitting the meta-analytic model is easy with brms! The formula specifies the study-specific effect size and standard error, an overall intercept (1), and the “random studies” ((1|study)). I’ll use four cores for speed and increase the adapt_delta parameter to avoid divergent transitions.
+
+```{r}
+library(metafor)
+head(dat.bangertdrowns2004)
+
+library(dplyr)
+d <- dat.bangertdrowns2004 %>%
+    mutate(label = paste0(author, " (", year, ")"), sei = sqrt(vi)) %>%
+    select(study = id, label, yi, sei) %>% 
+    slice(1:15)
+d
+mod <- brm(yi | se(sei) ~ 1 + (1|study), data = d, 
+           cores = 4, control= list(adapt_delta=.99) )
+
+library(vmisc)
+brms_forest(data = d, model = mod)
+
+brms_forest(
+    data = d, 
+    model = mod, 
+    show_data = TRUE,  # Shows data means and SEs
+    sort_estimates = TRUE,  # Sorts estimates based on their magnitude
+    dens_fill = "dodgerblue")  # Fill densities with blue
+```
+
+
+```{r}
+library(ggplot2)
+myplot <- brms_forest(data = d, 
+                      model = mod, 
+                      sort_estimates = TRUE)
+myplot + 
+    scale_y_continuous("Standardized ES", limits = c(-1.2, 1.2)) +
+    theme_blog()
+```
+

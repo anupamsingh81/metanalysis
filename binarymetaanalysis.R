@@ -1,0 +1,84 @@
+---
+title: "R Metanalysis of proportions Notebook"
+output: html_notebook
+---
+
+```{r}
+library(metafor)
+dat <- get(data(dat.yusuf1985))
+dat$grp_ratios <- round(dat$n1i / dat$n2i, 2) # to check for imbalanced groups
+
+dat = dat[dat$table=="6",] # table number 6 is main table
+par(mfrow=c(1,2))
+llplot(measure="OR", ai=ai, n1i=n1i, ci=ci, n2i=n2i, data=dat, 
+       subset=(table=="6"), drop00=FALSE, lwd=1, xlim=c(-5,5)) # log likelihood plots
+
+llplot(measure="OR", ai=ai, n1i=n1i, ci=ci, n2i=n2i, data=dat, 
+       subset=(table=="6"), drop00=FALSE, lwd=1, xlim=c(-5,5), scale=FALSE)
+
+
+# peto method, calculation of odds ratio
+
+resOR <- rma.peto(ai=ai, n1i=n1i, ci=ci, n2i=n2i,
+                data=dat, subset=(table=="6"))
+resOR
+
+# inverse variance more accepted
+
+dat <- escalc(measure="PETO", ai=ai, n1i=n1i, ci=ci, n2i=n2i,
+              data=dat, subset=(table=="6"), add=0)
+dat
+
+# fixed effec tinverse variance
+resFE <- rma(yi, vi, data=dat, method="FE")
+resFE
+
+# random effect inverse variance
+
+resRE <- rma(yi, vi, data=dat, method="DL") # Dersimonial laird random effect
+resRE
+
+# Back transform
+
+predict(resFE, transf=exp, digits=2)
+predict(resRE, transf=exp, digits=2)
+
+# Plot
+forest.rma(resRE)
+forest.rma(resFE)
+
+
+
+```
+
+#BRMS
+
+
+ data = dat %>% mutate(sei = sqrt(vi)) %>%
+    select(study = id, label= trial , yi, sei) %>% 
+    
+```{r}
+
+ data = dat %>% mutate(sei = sqrt(vi)) %>% filter(dat$yi != "NA")%>%
+    select(study = id, label= trial , yi, sei) 
+```
+```{r}
+
+
+mod1 <- brm(yi | se(sei) ~ 1 + (1|study), data = data, 
+           cores = 4, control= list(adapt_delta=.99) )
+mod1
+avg_es <- as.data.frame(mod1, pars = "b_")[,1]
+cat( (sum(avg_es > 0.2) / length(avg_es))*100, "%")
+library(vmisc)
+brms_forest(data = data, model = mod1)
+
+```
+
+probability distribution of point effect
+```{r}
+cat( (sum(avg_es > 0.1) / length(avg_es))*100, "%")
+```
+
+
+

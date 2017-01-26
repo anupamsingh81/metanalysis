@@ -1,0 +1,25 @@
+
+  model {
+    for ( s in 1:nS ) {
+      zC[s] ~ dbin( thetaC[s] , nC[s] )
+      zT[s] ~ dbin( thetaT[s] , nT[s] )
+      thetaC[s] ~ dbeta( thetaComega*(thetaCkappa-2)+1 ,
+                         (1-thetaComega)*(thetaCkappa-2)+1 )
+      thetaT[s] <- ilogit( rho[s] + logit( thetaC[s] ) ) # ilogit is logistic
+      rho[s] ~ dnorm( rhoMu , 1/rhoSD^2 )
+    }
+    # Prior rhoMeta, rhoSD:
+    rhoMu ~ dnorm( 0 , 1/10^2 )
+    rhoSD ~ dgamma(1.64,0.64) # mode=1,sd=2
+    # Prior on thetaComega and thetaCkappa:
+    thetaComega ~ dbeta(1.01,1.01) 
+    thetaCkappa <- thetaCkappaMinusTwo + 2
+    thetaCkappaMinusTwo ~ dgamma(2.618,0.162) # mode=10 , sd=10
+    # Derived variables:
+    for ( s in 1:nS ) { 
+      mu[s] <- thetaT[s] / thetaC[s]  # risk ratio
+    }
+    thetaTomega <- ilogit( rhoMu + logit( thetaComega ) )
+    muMeta <- thetaTomega / thetaComega  # risk ratio
+  }
+
